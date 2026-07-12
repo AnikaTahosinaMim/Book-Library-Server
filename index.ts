@@ -42,12 +42,6 @@ async function connectDB() {
     const db = client.db("books");
     const booksCollection = db.collection("books");
 
-    // books get
-    // app.get("/books", async (req, res) => {
-    //   const result = await booksCollection.find().toArray();
-    //   res.send(result);
-    // });
-
     // books details
     app.get("/books/:id", async (req, res) => {
       const id = req.params.id;
@@ -56,36 +50,6 @@ async function connectDB() {
     });
 
     // scrach implement and get books:
-    app.get("/books", async (req, res) => {
-      const { search, category, price } = req.query;
-
-      const query: Record<string, any> = {};
-
-      if (search) {
-        query.title = {
-          $regex: search,
-          $options: "i",
-        };
-      }
-
-      if (category) {
-        query.category = category;
-      }
-
-      let cursor = booksCollection.find(query);
-
-      if (price === "low-high") {
-        cursor = cursor.sort({ price: 1 });
-      }
-
-      if (price === "high-low") {
-        cursor = cursor.sort({ price: -1 });
-      }
-
-      const result = await cursor.toArray();
-
-      res.send(result);
-    });
 
     // add Book
     app.post("/books", async (req, res) => {
@@ -135,6 +99,55 @@ async function connectDB() {
       const result = await booksCollection.updateOne(query, updateDoc);
 
       res.send(result);
+    });
+
+    // pagination and filter
+    // pagination and filter
+    app.get("/books", async (req, res) => {
+      const {
+        search = "",
+        category = "",
+        price = "",
+        page = 1,
+        limit = 3,
+      } = req.query;
+
+      const query: Record<string, any> = {};
+
+      if (search) {
+        query.title = {
+          $regex: search,
+          $options: "i",
+        };
+      }
+
+      if (category) {
+        query.category = category;
+      }
+
+      const currentPage = Number(page);
+      const perPage = Number(limit);
+
+      const totalBooks = await booksCollection.countDocuments(query);
+
+      let cursor = booksCollection
+        .find(query)
+        .skip((currentPage - 1) * perPage)
+        .limit(perPage);
+
+      if (price === "low-high") {
+        cursor = cursor.sort({ price: 1 });
+      } else if (price === "high-low") {
+        cursor = cursor.sort({ price: -1 });
+      }
+
+      const books = await cursor.toArray();
+
+      res.send({
+        books,
+        totalPages: Math.ceil(totalBooks / perPage),
+        currentPage,
+      });
     });
 
     console.log(" Test document inserted");
