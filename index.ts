@@ -1,10 +1,11 @@
 const dns = require("node:dns");
 dns.setServers(["1.1.1.1", "1.0.0.1"]);
 
-import express from "express";
+import express, { NextFunction, Response, Request } from "express";
 import dotenv from "dotenv";
 import cors from "cors";
 import { MongoClient, ObjectId, ServerApiVersion } from "mongodb";
+import { createRemoteJWKSet, jwtVerify } from "jose-cjs";
 
 dotenv.config();
 
@@ -30,6 +31,30 @@ const client = new MongoClient(uri, {
   },
 });
 
+// jwt
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.CLIENT_URL}/api/auth/jwks`),
+);
+const verifyToken = async (req: Request, res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer")) {
+    return res.status(401).json({ msg: "Unauthorized" });
+  }
+  const token = authHeader.split(" ")[1];
+  if (!token) {
+    return res.status(401).json({ msg: "Unauthorized" });
+  }
+
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+    // req.user = payload;
+    console.log(payload);
+    next();
+  } catch (error) {
+    console.log(error);
+  }
+};
+
 // Database Connection
 async function connectDB() {
   try {
@@ -52,7 +77,7 @@ async function connectDB() {
     // scrach implement and get books:
 
     // add Book
-    app.post("/books", async (req, res) => {
+    app.post("/books", verifyToken, async (req, res) => {
       const book = req.body;
 
       const result = await booksCollection.insertOne(book);
@@ -61,9 +86,8 @@ async function connectDB() {
     });
     // manage book
     // delete book
-    // manage book
-    // delete book
-    app.delete("/books/:id", async (req, res) => {
+
+    app.delete("/books/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
 
       const result = await booksCollection.deleteOne({
@@ -74,7 +98,7 @@ async function connectDB() {
     });
 
     // edit or update
-    app.put("/books/:id", async (req, res) => {
+    app.put("/books/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
       const updatedBook = req.body;
 
