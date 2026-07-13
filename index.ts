@@ -88,7 +88,7 @@ async function connectDB() {
     // delete book
 
     app.delete("/books/:id", verifyToken, async (req, res) => {
-      const { id } = req.params;
+      const id = req.params.id as string;
 
       const result = await booksCollection.deleteOne({
         _id: new ObjectId(id),
@@ -99,7 +99,7 @@ async function connectDB() {
 
     // edit or update
     app.put("/books/:id", verifyToken, async (req, res) => {
-      const { id } = req.params;
+      const id = req.params.id as string;
       const updatedBook = req.body;
 
       const query = {
@@ -133,8 +133,14 @@ async function connectDB() {
         category = "",
         price = "",
         page = 1,
-        limit = 3,
+        limit = 4,
       } = req.query;
+      // if (category) {
+      //   query.category = {
+      //     $regex: `^${category}$`,
+      //     $options: "i",
+      //   };
+      // }
 
       const query: Record<string, any> = {};
 
@@ -144,10 +150,15 @@ async function connectDB() {
           $options: "i",
         };
       }
-
       if (category) {
-        query.category = category;
+        query.category = {
+          $regex: `^${category}$`,
+          $options: "i",
+        };
       }
+      console.log(req.query);
+      console.log(category);
+      console.log(query);
 
       const currentPage = Number(page);
       const perPage = Number(limit);
