@@ -10,9 +10,7 @@ import { createRemoteJWKSet, jwtVerify } from "jose-cjs";
 dotenv.config();
 
 const app = express();
-const PORT = 5000;
 app.use(cors());
-
 app.use(express.json());
 
 // MongoDB URI
@@ -30,6 +28,30 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   },
 });
+
+// Cache the connection across invocations (important for serverless)
+let isConnected = false;
+async function connectDB() {
+  if (isConnected) return;
+  await client.connect();
+  await client.db("admin").command({ ping: 1 });
+  isConnected = true;
+  console.log("Connected to MongoDB");
+}
+
+// Middleware: make sure DB is connected before handling any request
+app.use(async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    console.error("MongoDB Connection Error:", error);
+    res.status(500).json({ msg: "Database connection failed" });
+  }
+});
+
+const db = client.db("books");
+const booksCollection = db.collection("books");
 
 // jwt
 const JWKS = createRemoteJWKSet(
@@ -52,159 +74,127 @@ const verifyToken = async (req: Request, res: Response, next: NextFunction) => {
     next();
   } catch (error) {
     console.log(error);
+    return res.status(401).json({ msg: "Unauthorized" });
   }
 };
 
-// Database Connection
-async function connectDB() {
-  try {
-    await client.connect();
+app.get("/", (req, res) => {
+  res.send("Server is running...");
+});
 
-    await client.db("admin").command({ ping: 1 });
+// books details
+app.get("/books/:id", async (req, res) => {
+  const id = req.params.id;
+  const result = await booksCollection.findOne({ _id: new ObjectId(id) });
+  res.send(result);
+});
 
-    console.log(" Connected to MongoDB");
+// add Book
+app.post("/books", verifyToken, async (req, res) => {
+  const book = req.body;
+  const result = await booksCollection.insertOne(book);
+  res.send(result);
+});
 
-    const db = client.db("books");
-    const booksCollection = db.collection("books");
+// delete book
+app.delete("/books/:id", verifyToken, async (req, res) => {
+  const id = req.params.id as string;
+  const result = await booksCollection.deleteOne({
+    _id: new ObjectId(id),
+  });
+  res.send(result);
+});
 
-    // books details
-    app.get("/books/:id", async (req, res) => {
-      const id = req.params.id;
-      const result = await booksCollection.findOne({ _id: new ObjectId(id) });
-      res.send(result);
-    });
+// edit or update
+app.put("/books/:id", verifyToken, async (req, res) => {
+  const id = req.params.id as string;
+  const updatedBook = req.body;
 
-    // scrach implement and get books:
+  const query = {
+    _id: new ObjectId(id),
+  };
 
-    // add Book
-    app.post("/books", verifyToken, async (req, res) => {
-      const book = req.body;
+  const updateDoc = {
+    $set: {
+      title: updatedBook.title,
+      author: updatedBook.author,
+      image: updatedBook.image,
+      category: updatedBook.category,
+      rating: updatedBook.rating,
+      copies: updatedBook.copies,
+      description: updatedBook.description,
+      publishedYear: updatedBook.publishedYear,
+      price: updatedBook.price,
+    },
+  };
 
-      const result = await booksCollection.insertOne(book);
+  const result = await booksCollection.updateOne(query, updateDoc);
+  res.send(result);
+});
 
-      res.send(result);
-    });
-    // manage book
-    // delete book
+// pagination and filter
+app.get("/books", async (req, res) => {
+  const {
+    search = "",
+    category = "",
+    price = "",
+    page = 1,
+    limit = 4,
+  } = req.query;
 
-    app.delete("/books/:id", verifyToken, async (req, res) => {
-      const id = req.params.id as string;
+  const query: Record<string, any> = {};
 
-      const result = await booksCollection.deleteOne({
-        _id: new ObjectId(id),
-      });
-
-      res.send(result);
-    });
-
-    // edit or update
-    app.put("/books/:id", verifyToken, async (req, res) => {
-      const id = req.params.id as string;
-      const updatedBook = req.body;
-
-      const query = {
-        _id: new ObjectId(id),
-      };
-
-      const updateDoc = {
-        $set: {
-          title: updatedBook.title,
-          author: updatedBook.author,
-          image: updatedBook.image,
-          category: updatedBook.category,
-          rating: updatedBook.rating,
-          copies: updatedBook.copies,
-          description: updatedBook.description,
-          publishedYear: updatedBook.publishedYear,
-          price: updatedBook.price,
-        },
-      };
-
-      const result = await booksCollection.updateOne(query, updateDoc);
-
-      res.send(result);
-    });
-
-    // pagination and filter
-    // pagination and filter
-    app.get("/books", async (req, res) => {
-      const {
-        search = "",
-        category = "",
-        price = "",
-        page = 1,
-        limit = 4,
-      } = req.query;
-      // if (category) {
-      //   query.category = {
-      //     $regex: `^${category}$`,
-      //     $options: "i",
-      //   };
-      // }
-
-      const query: Record<string, any> = {};
-
-      if (search) {
-        query.title = {
-          $regex: search,
-          $options: "i",
-        };
-      }
-      if (category) {
-        query.category = {
-          $regex: `^${category}$`,
-          $options: "i",
-        };
-      }
-      console.log(req.query);
-      console.log(category);
-      console.log(query);
-
-      const currentPage = Number(page);
-      const perPage = Number(limit);
-
-      const totalBooks = await booksCollection.countDocuments(query);
-
-      let cursor = booksCollection
-        .find(query)
-        .skip((currentPage - 1) * perPage)
-        .limit(perPage);
-
-      if (price === "low-high") {
-        cursor = cursor.sort({ price: 1 });
-      } else if (price === "high-low") {
-        cursor = cursor.sort({ price: -1 });
-      }
-
-      const books = await cursor.toArray();
-
-      res.send({
-        books,
-        totalPages: Math.ceil(totalBooks / perPage),
-        currentPage,
-      });
-    });
-
-    console.log(" Test document inserted");
-  } catch (error) {
-    console.error(" MongoDB Connection Error:", error);
-    process.exit(1);
+  if (search) {
+    query.title = {
+      $regex: search,
+      $options: "i",
+    };
   }
+  if (category) {
+    query.category = {
+      $regex: `^${category}$`,
+      $options: "i",
+    };
+  }
+
+  const currentPage = Number(page);
+  const perPage = Number(limit);
+
+  const totalBooks = await booksCollection.countDocuments(query);
+
+  let cursor = booksCollection
+    .find(query)
+    .skip((currentPage - 1) * perPage)
+    .limit(perPage);
+
+  if (price === "low-high") {
+    cursor = cursor.sort({ price: 1 });
+  } else if (price === "high-low") {
+    cursor = cursor.sort({ price: -1 });
+  }
+
+  const books = await cursor.toArray();
+
+  res.send({
+    books,
+    totalPages: Math.ceil(totalBooks / perPage),
+    currentPage,
+  });
+});
+
+// Only listen locally — Vercel will handle requests via the exported app
+if (process.env.NODE_ENV !== "production") {
+  const PORT = 5000;
+  connectDB()
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`Server running on http://localhost:${PORT}`);
+      });
+    })
+    .catch((err) => {
+      console.error("Failed to start server:", err);
+      process.exit(1);
+    });
 }
 
-// Start Server
-async function startServer() {
-  await connectDB();
-
-  app.get("/", (req, res) => {
-    res.send("Server is running...");
-  });
-
-  app.listen(PORT, () => {
-    console.log(` Server running on http://localhost:${PORT}`);
-  });
-}
-
-startServer();
-
-export default client;
+export default app;
